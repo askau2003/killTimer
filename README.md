@@ -54,14 +54,6 @@ Pick one of the two methods.
 ## 5. Use it while leveling
 
 1. Kills, elapsed time, and quest-item drops are tracked automatically - nothing to set up.
-   The overlay looks like this while you play:
-
-   ```
-   2:14  87 kills
-   12  Timber Wolf
-   5  Mottled Boar (62%)  5/8
-   ```
-
 2. Run `/killtimer` any time to manually reset the overlay and its counters.
 3. With RestedXP installed, the overlay resets itself whenever RestedXP's leveling step
    changes, and prints a summary to chat (also saved to `killTimerLog`, per character) for
