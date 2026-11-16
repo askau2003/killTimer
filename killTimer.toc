@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: killTimer
 ## Notes: Kills, tid og quest-drops pr. RestedXP-step. /killtimer nulstiller.
-## Version: 1.3
+## Version: 1.4
 ## SavedVariablesPerCharacter: killTimerLog
 ## SavedVariables: killTimerDB
 

@@ -1,5 +1,8 @@
 local start, kills, lastStep, lastMob, lootFromMob
-local mobs, mobOrder = {}, {}    -- mob name -> kill count (+ display order)
+local lastMonsterCounts = {}
+local pendingKills = {}  -- mobs killed since the last OnUpdate tick, oldest first
+local mobs, mobOrder = {}, {}    -- mob name -> kill count (+ display order), for kills not tied to a quest
+local monsterGroups, groupOrder = {}, {}  -- objective key -> { text, fulfilled, required, mobs, mobOrder }
 local items, itemOrder = {}, {}  -- item name -> { count = n, fulfilled = f, required = r }
 
 -- Builds a pattern from the game's own text "%s dies, you gain %d experience."
@@ -32,16 +35,38 @@ local f = CreateFrame("Frame", "killTimerFrame", UIParent, "BackdropTemplate")
 -- Anchored by its own TOPLEFT corner, which stays fixed on screen as scale or
 -- size change - only "TOP" (top-center) would make those controls appear to
 -- also shift the panel's position.
-f:SetPoint(unpack(DEFAULT_POINT))
+if killTimerDB.point then
+    local p = killTimerDB.point
+    f:SetPoint(p.point, _G[p.relativeTo] or UIParent, p.relativePoint, p.x, p.y)
+else
+    f:SetPoint(unpack(DEFAULT_POINT))
+end
 f:SetScale(killTimerDB.scale)
 f:SetClipsChildren(true)
 f:SetMovable(true)
 f:EnableMouse(true)
 f:RegisterForDrag("LeftButton")
-f:SetScript("OnDragStart", function(self)
-    if not killTimerDB.locked then self:StartMoving() end
-end)
-f:SetScript("OnDragStop", f.StopMovingOrSizing)
+local function BeginDrag()
+    if not killTimerDB.locked then f:StartMoving() end
+end
+
+-- Dragging only moves the frame on screen - without persisting the resulting
+-- point here, the panel would snap back to DEFAULT_POINT on the next /reload.
+-- Shared with textHitbox below, since that overlay covers most of the panel.
+local function EndDrag()
+    f:StopMovingOrSizing()
+    local point, relativeTo, relativePoint, x, y = f:GetPoint()
+    killTimerDB.point = {
+        point = point,
+        relativeTo = relativeTo and relativeTo.GetName and relativeTo:GetName() or "UIParent",
+        relativePoint = relativePoint,
+        x = x,
+        y = y,
+    }
+end
+
+f:SetScript("OnDragStart", BeginDrag)
+f:SetScript("OnDragStop", EndDrag)
 f:SetBackdrop({
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -89,6 +114,34 @@ text:SetJustifyH("LEFT")
 text:SetWordWrap(true)
 text:SetSpacing(6)
 
+-- Grouped monster-objective lines collapse every contributing NPC name into one
+-- line (see MonsterObjectives), so the per-mob breakdown that used to be visible
+-- directly is shown as a tooltip instead. This needs its own frame rather than
+-- EnableMouse() directly on the `text` FontString: a mouse-enabled Region swallows
+-- clicks, so dragging from this part of the panel (most of its body) would stop
+-- working - this overlay forwards drag to the panel instead of just eating it.
+local textHitbox = CreateFrame("Frame", nil, f)
+textHitbox:SetPoint("TOPLEFT", text, "TOPLEFT")
+textHitbox:SetPoint("BOTTOMRIGHT", text, "BOTTOMRIGHT")
+textHitbox:EnableMouse(true)
+textHitbox:RegisterForDrag("LeftButton")
+textHitbox:SetScript("OnDragStart", BeginDrag)
+textHitbox:SetScript("OnDragStop", EndDrag)
+textHitbox:SetScript("OnEnter", function(self)
+    if #groupOrder == 0 then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    for i, key in ipairs(groupOrder) do
+        local group = monsterGroups[key]
+        if i > 1 then GameTooltip:AddLine(" ") end
+        GameTooltip:AddLine(group.text, GOLD[1], GOLD[2], GOLD[3])
+        for _, name in ipairs(group.mobOrder) do
+            GameTooltip:AddLine(("%d  %s"):format(group.mobs[name], name), 1, 1, 1)
+        end
+    end
+    GameTooltip:Show()
+end)
+textHitbox:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
 -- The panel is a fixed size (set via the options panel's Width/Height sliders),
 -- so content wraps/clips to it instead of the panel growing to fit the content.
 local function ApplySize(width, height)
@@ -96,6 +149,16 @@ local function ApplySize(width, height)
     text:SetWidth(width - PADDING * 2)
 end
 ApplySize(killTimerDB.width, killTimerDB.height)
+
+-- SetScale()/SetSize() applied this early - while the addon's own file is still
+-- loading, before the UI has done its first layout pass - can render at the
+-- wrong effective size on screen until something touches the frame again later
+-- (e.g. re-clicking an Options slider to the same value fixes it). Reapplying
+-- once on the next frame tick avoids depending on that manual nudge.
+C_Timer.After(0, function()
+    f:SetScale(killTimerDB.scale)
+    ApplySize(killTimerDB.width, killTimerDB.height)
+end)
 
 -- Active "item" quest objectives, keyed by item name. Lets a required item show up
 -- at 0% from the first kill, not just after the first drop.
@@ -123,6 +186,39 @@ local function QuestItemGoals()
         end
     end
     return goals
+end
+
+-- Every active "kill X mobs" quest objective, keyed by questID:index, with its
+-- display name (the creature family, e.g. "Centaur") and progress. A quest's
+-- monster objective can name a whole creature family rather than the specific NPC
+-- in the kill text ("Centaur Plunderer"), so matching by name doesn't work -
+-- instead the kill list watches numFulfilled for increases and credits whichever
+-- mob was killed most recently (see OnUpdate), grouped under this objective.
+-- This client's text is "13/15 Centaur" (count first), not Blizzard's usual
+-- "Centaur: 13/15" - try that form first, falling back to the usual one.
+local function MonsterObjectives()
+    local objectives = {}
+    if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo
+        and C_QuestLog.GetQuestObjectives) then
+        return objectives
+    end
+    for i = 1, C_QuestLog.GetNumQuestLogEntries() do
+        local info = C_QuestLog.GetInfo(i)
+        if info and not info.isHeader and info.questID then
+            for idx, obj in ipairs(C_QuestLog.GetQuestObjectives(info.questID) or {}) do
+                if obj.type == "monster" then
+                    local name = obj.text and (obj.text:match("^%d+%s*/%s*%d+%s+(.+)$")
+                        or obj.text:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$")) or obj.text
+                    objectives[info.questID .. ":" .. idx] = {
+                        text = name or obj.text,
+                        fulfilled = obj.numFulfilled or 0,
+                        required = obj.numRequired,
+                    }
+                end
+            end
+        end
+    end
+    return objectives
 end
 
 -- Item names from RestedXP's own currently-displayed step(s), read straight off its
@@ -194,6 +290,16 @@ local function Lines()
     for _, name in ipairs(mobOrder) do
         out[#out + 1] = ("%d  %s"):format(mobs[name], name)
     end
+    for _, key in ipairs(groupOrder) do
+        local group = monsterGroups[key]
+        if group.required then
+            local pct = group.required > 0 and math.floor(group.fulfilled / group.required * 100 + 0.5) or 0
+            out[#out + 1] = ("%d  %s (%d%%)  %d/%d"):format(
+                group.fulfilled, group.text, pct, group.fulfilled, group.required)
+        else
+            out[#out + 1] = ("%d  %s"):format(group.fulfilled, group.text)
+        end
+    end
     for _, name in ipairs(itemOrder) do
         local item = items[name]
         local pct = kills > 0 and math.floor(item.count / kills * 100 + 0.5) or 0
@@ -209,7 +315,13 @@ end
 
 local function Reset()
     start, kills, lastMob = nil, 0, nil
-    wipe(mobs) wipe(mobOrder) wipe(items) wipe(itemOrder)
+    wipe(mobs) wipe(mobOrder) wipe(items) wipe(itemOrder) wipe(pendingKills)
+    wipe(monsterGroups) wipe(groupOrder)
+    -- Baseline so progress already made on a quest before this reset isn't
+    -- mistaken for a kill once the next OnUpdate tick diffs against it.
+    local baseline = {}
+    for key, obj in pairs(MonsterObjectives()) do baseline[key] = obj.fulfilled end
+    lastMonsterCounts = baseline
 end
 
 -- Popup with a selectable, multi-line EditBox - addons can't touch the OS
@@ -285,14 +397,10 @@ f:SetScript("OnEvent", function(_, event, msg)
     if event == "CHAT_MSG_COMBAT_XP_GAIN" then
         local mob = msg:match(killPattern)
         if not mob then return end
-        start = start or GetTime()
-        kills = kills + 1
-        if not mobs[mob] then
-            mobs[mob] = 0
-            mobOrder[#mobOrder + 1] = mob
-        end
-        mobs[mob] = mobs[mob] + 1
+        -- Counting/crediting happens later, once OnUpdate sees whether this kill
+        -- actually advanced a quest objective (see MonsterObjectiveCounts above).
         lastMob = mob
+        pendingKills[#pendingKills + 1] = mob
 
     elseif event == "LOOT_READY" then
         -- Is this a corpse we're looting (and not e.g. a chest or Rocket Car Rubble)?
@@ -339,6 +447,74 @@ f:SetScript("OnUpdate", function(_, elapsed)
         lastStep = step
         Reset()
     end
+
+    local objectives = MonsterObjectives()
+
+    -- An active, unfulfilled item-type objective means a quest item needs looting
+    -- from *some* mob - there's no way to tell which NPCs can drop it, so every
+    -- kill counts while that's the case, same as before mob filtering existed.
+    local farmingItem = false
+    for _, goal in pairs(QuestItemGoals()) do
+        if goal.required and (goal.fulfilled or 0) < goal.required then
+            farmingItem = true
+            break
+        end
+    end
+
+    if farmingItem then
+        for _, mob in ipairs(pendingKills) do
+            start = start or GetTime()
+            kills = kills + 1
+            if not mobs[mob] then
+                mobs[mob] = 0
+                mobOrder[#mobOrder + 1] = mob
+            end
+            mobs[mob] = mobs[mob] + 1
+        end
+    else
+        -- Credit a kill once a monster objective's progress actually increases, rather
+        -- than matching the kill text's mob name against objective text (which fails
+        -- when an objective names a creature family, e.g. "Centaur", instead of the
+        -- specific NPC killed). The delta is credited to the most recently killed mob
+        -- (lastMob); if two different quest mobs die within the same 0.2s tick, the
+        -- earlier one can be misattributed to the later one. Every mob that
+        -- contributes to the same objective (e.g. every Centaur variant) is grouped
+        -- into one display line instead of one line per distinct NPC name.
+        for key, obj in pairs(objectives) do
+            local prev = lastMonsterCounts[key] or obj.fulfilled
+            local objDelta = obj.fulfilled - prev
+            if objDelta > 0 and lastMob then
+                start = start or GetTime()
+                kills = kills + objDelta
+                local group = monsterGroups[key]
+                if not group then
+                    group = { mobs = {}, mobOrder = {} }
+                    monsterGroups[key] = group
+                    groupOrder[#groupOrder + 1] = key
+                end
+                if not group.mobs[lastMob] then
+                    group.mobs[lastMob] = 0
+                    group.mobOrder[#group.mobOrder + 1] = lastMob
+                end
+                group.mobs[lastMob] = group.mobs[lastMob] + objDelta
+            end
+        end
+    end
+    wipe(pendingKills)
+
+    -- Keep every known group's displayed progress in sync with the quest log,
+    -- even on ticks where nothing died (e.g. right after a /reload).
+    for key, group in pairs(monsterGroups) do
+        local obj = objectives[key]
+        if obj then
+            group.text, group.fulfilled, group.required = obj.text, obj.fulfilled, obj.required
+        end
+    end
+
+    local baseline = {}
+    for key, obj in pairs(objectives) do baseline[key] = obj.fulfilled end
+    lastMonsterCounts = baseline
+
     SyncGoals()
 
     local lines = Lines()
