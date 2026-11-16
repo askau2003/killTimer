@@ -50,17 +50,42 @@ local function QuestItemGoals()
     return goals
 end
 
--- Seeds `items` with any active quest-item goal (at 0 if not looted yet) and
--- refreshes its fulfilled/required count from the quest log.
-local function SyncGoals()
-    for name, goal in pairs(QuestItemGoals()) do
-        local item = items[name]
-        if not item then
-            item = { count = 0 }
-            items[name] = item
-            itemOrder[#itemOrder + 1] = name
+-- Item names from RestedXP's own currently-displayed step(s), read straight off its
+-- guide-window frames (RXPFrame.CurrentStepFrame.framePool[n].step.elements[n].itemName).
+-- This isn't a public RXPGuides API - it's internal UI state - so it can break on a
+-- RestedXP update. If that happens this just returns an empty table and SyncGoals()
+-- falls back to showing every active quest-item goal instead of only the current step's.
+local function CurrentStepItemNames()
+    local names = {}
+    local framePool = RXPFrame and RXPFrame.CurrentStepFrame and RXPFrame.CurrentStepFrame.framePool
+    if not framePool then return names end
+    for _, stepframe in ipairs(framePool) do
+        local step = stepframe.step
+        for _, element in ipairs(step and step.elements or {}) do
+            if element.itemName then
+                names[element.itemName] = true
+            end
         end
-        item.fulfilled, item.required = goal.fulfilled, goal.required
+    end
+    return names
+end
+
+-- Seeds `items` with any active quest-item goal (at 0 if not looted yet) and
+-- refreshes its fulfilled/required count from the quest log. Restricted to the
+-- item(s) RestedXP's current step is asking for, when that's known.
+local function SyncGoals()
+    local currentStepItems = CurrentStepItemNames()
+    local onlyCurrentStep = next(currentStepItems) ~= nil
+    for name, goal in pairs(QuestItemGoals()) do
+        if not onlyCurrentStep or currentStepItems[name] then
+            local item = items[name]
+            if not item then
+                item = { count = 0 }
+                items[name] = item
+                itemOrder[#itemOrder + 1] = name
+            end
+            item.fulfilled, item.required = goal.fulfilled, goal.required
+        end
     end
 end
 
