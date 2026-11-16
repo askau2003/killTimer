@@ -1,6 +1,7 @@
 local ns = killTimerNS
 local f = ns.frame
 local ApplySize = ns.ApplySize
+local ShowCopyPopup = ns.ShowCopyPopup
 
 -- Options panel, shown under Settings > AddOns > killTimer.
 local options = CreateFrame("Frame", "killTimerOptionsPanel", UIParent)
@@ -86,6 +87,12 @@ resetButton:SetScript("OnClick", function()
     f:ClearAllPoints()
     f:SetPoint(unpack(ns.DEFAULT_POINT))
 end)
+
+local copyButton = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+copyButton:SetSize(140, 22)
+copyButton:SetPoint("TOPLEFT", resetButton, "BOTTOMLEFT", 0, -12)
+copyButton:SetText("Copy data to share")
+copyButton:SetScript("OnClick", ShowCopyPopup)
 
 if Settings and Settings.RegisterCanvasLayoutCategory then
     local category = Settings.RegisterCanvasLayoutCategory(options, options.name)

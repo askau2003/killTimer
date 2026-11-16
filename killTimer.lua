@@ -67,6 +67,13 @@ header:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
 header:SetJustifyH("LEFT")
 header:SetWordWrap(false)
 
+-- Small button so sharing data doesn't require remembering the /killtimer copy command.
+local copyButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+copyButton:SetSize(44, 16)
+copyButton:SetPoint("TOPRIGHT", -PADDING + 12, -PADDING + 3)
+copyButton:SetText("Copy")
+copyButton:GetFontString():SetFont(FONT, 9)
+
 local divider = f:CreateTexture(nil, "ARTWORK")
 divider:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.4)
 divider:SetHeight(2)
@@ -205,6 +212,72 @@ local function Reset()
     wipe(mobs) wipe(mobOrder) wipe(items) wipe(itemOrder)
 end
 
+-- Popup with a selectable, multi-line EditBox - addons can't touch the OS
+-- clipboard directly, so Ctrl+A/Ctrl+C in a text box is the standard workaround.
+local copyFrame = CreateFrame("Frame", "killTimerCopyFrame", UIParent, "BackdropTemplate")
+copyFrame:SetSize(360, 280)
+copyFrame:SetPoint("CENTER")
+copyFrame:SetFrameStrata("DIALOG")
+copyFrame:SetClampedToScreen(true)
+copyFrame:SetMovable(true)
+copyFrame:EnableMouse(true)
+copyFrame:RegisterForDrag("LeftButton")
+copyFrame:SetScript("OnDragStart", copyFrame.StartMoving)
+copyFrame:SetScript("OnDragStop", copyFrame.StopMovingOrSizing)
+copyFrame:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 },
+})
+copyFrame:SetBackdropColor(0, 0, 0, 0.9)
+copyFrame:SetBackdropBorderColor(unpack(GOLD))
+copyFrame:Hide()
+tinsert(UISpecialFrames, "killTimerCopyFrame") -- lets Escape close it like a Blizzard dialog
+
+local copyTitle = copyFrame:CreateFontString(nil, "OVERLAY")
+copyTitle:SetFont(FONT, 12)
+copyTitle:SetPoint("TOPLEFT", PADDING, -PADDING)
+copyTitle:SetPoint("RIGHT", copyFrame, "RIGHT", -PADDING, 0)
+copyTitle:SetJustifyH("LEFT")
+copyTitle:SetWordWrap(true)
+copyTitle:SetText("Ctrl+A to select, Ctrl+C to copy")
+copyTitle:SetTextColor(unpack(GOLD))
+
+local copyClose = CreateFrame("Button", nil, copyFrame, "UIPanelCloseButton")
+copyClose:SetPoint("TOPRIGHT", -2, -2)
+
+local copyScroll = CreateFrame("ScrollFrame", "killTimerCopyScroll", copyFrame, "UIPanelScrollFrameTemplate")
+copyScroll:SetPoint("TOPLEFT", copyTitle, "BOTTOMLEFT", 0, -10)
+copyScroll:SetPoint("BOTTOMRIGHT", -30, PADDING)
+
+local copyEditBox = CreateFrame("EditBox", nil, copyScroll)
+copyEditBox:SetMultiLine(true)
+copyEditBox:SetFontObject(ChatFontNormal)
+copyEditBox:SetWidth(300)
+copyEditBox:SetAutoFocus(false)
+copyEditBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() copyFrame:Hide() end)
+copyScroll:SetScrollChild(copyEditBox)
+
+-- Strip WoW's |cAARRGGBB...|r color codes so the copied text is plain, shareable
+-- plain text (e.g. for pasting into Discord) instead of raw escape sequences.
+local function StripColors(s)
+    return (s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+local function ShowCopyPopup()
+    local lines = Lines()
+    for i, line in ipairs(lines) do
+        lines[i] = StripColors(line)
+    end
+    copyEditBox:SetText(table.concat(lines, "\n"))
+    copyFrame:Show()
+    copyEditBox:SetFocus()
+    copyEditBox:HighlightText()
+end
+
+copyButton:SetScript("OnClick", ShowCopyPopup)
+
 f:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
 f:RegisterEvent("CHAT_MSG_LOOT")
 f:RegisterEvent("LOOT_READY")
@@ -288,9 +361,16 @@ killTimerNS = {
     WIDTH_MAX = WIDTH_MAX,
     HEIGHT_MIN = HEIGHT_MIN,
     HEIGHT_MAX = HEIGHT_MAX,
+    ShowCopyPopup = ShowCopyPopup,
 }
 
 SLASH_KILLTIMER1 = "/killtimer"
-SlashCmdList.KILLTIMER = Reset
+SlashCmdList.KILLTIMER = function(msg)
+    if msg and msg:lower():match("^copy") then
+        ShowCopyPopup()
+    else
+        Reset()
+    end
+end
 
 Reset()
