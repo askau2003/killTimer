@@ -13,7 +13,18 @@ local lootPrefix = LOOT_ITEM_SELF:match("^(.-)%%s") or ""
 local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
 local QUEST_ITEM_CLASS = 12
 
-local f = CreateFrame("Frame", "killTimerFrame", UIParent)
+local PADDING = 22
+local MIN_WIDTH, MAX_WIDTH = 260, 520
+local GOLD = { 1, 0.82, 0 }
+local FONT = "Fonts\\FRIZQT__.TTF"
+
+local function Clamp(value, min, max)
+    if value < min then return min end
+    if value > max then return max end
+    return value
+end
+
+local f = CreateFrame("Frame", "killTimerFrame", UIParent, "BackdropTemplate")
 f:SetSize(220, 20)
 f:SetPoint("TOP", 0, -120)
 f:SetMovable(true)
@@ -21,10 +32,43 @@ f:EnableMouse(true)
 f:RegisterForDrag("LeftButton")
 f:SetScript("OnDragStart", f.StartMoving)
 f:SetScript("OnDragStop", f.StopMovingOrSizing)
+f:SetBackdrop({
+    bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 12,
+    insets = { left = 3, right = 3, top = 3, bottom = 3 },
+})
+f:SetBackdropColor(0, 0, 0, 0.75)
+f:SetBackdropBorderColor(unpack(GOLD))
 
-local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-text:SetPoint("TOPLEFT")
+-- Title: the addon's own name, so the overlay is recognizable at a glance.
+local title = f:CreateFontString(nil, "OVERLAY")
+title:SetFont(FONT, 12)
+title:SetPoint("TOPLEFT", PADDING, -PADDING)
+title:SetJustifyH("LEFT")
+title:SetWordWrap(false)
+title:SetText("killTimer")
+title:SetTextColor(unpack(GOLD))
+
+-- Header: elapsed time + kill count, shown larger/bolder than the mob/item list.
+local header = f:CreateFontString(nil, "OVERLAY")
+header:SetFont(FONT, 16)
+header:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -10)
+header:SetJustifyH("LEFT")
+header:SetWordWrap(false)
+
+local divider = f:CreateTexture(nil, "ARTWORK")
+divider:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.4)
+divider:SetHeight(2)
+divider:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -12)
+divider:SetPoint("RIGHT", f, "RIGHT", -PADDING, 0)
+
+local text = f:CreateFontString(nil, "OVERLAY")
+text:SetFont(FONT, 12)
+text:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -12)
 text:SetJustifyH("LEFT")
+text:SetWordWrap(false)
+text:SetSpacing(6)
 
 -- Active "item" quest objectives, keyed by item name. Lets a required item show up
 -- at 0% from the first kill, not just after the first drop.
@@ -203,7 +247,26 @@ f:SetScript("OnUpdate", function(_, elapsed)
         Reset()
     end
     SyncGoals()
-    text:SetText(table.concat(Lines(), "\n"))
+
+    local lines = Lines()
+    header:SetText(lines[1])
+    local hasBody = #lines > 1
+    text:SetShown(hasBody)
+    divider:SetShown(hasBody)
+    if hasBody then
+        text:SetText(table.concat(lines, "\n", 2))
+    end
+
+    -- Resize the panel to fit the current content (title + header + optional body).
+    local contentWidth = math.max(title:GetStringWidth(), header:GetStringWidth(),
+        hasBody and text:GetStringWidth() or 0)
+    f:SetWidth(Clamp(contentWidth + PADDING * 2, MIN_WIDTH, MAX_WIDTH))
+
+    local height = PADDING * 2 + title:GetStringHeight() + 10 + header:GetStringHeight()
+    if hasBody then
+        height = height + 12 + 2 + 12 + text:GetStringHeight()
+    end
+    f:SetHeight(height)
 end)
 
 SLASH_KILLTIMER1 = "/killtimer"
