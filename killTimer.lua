@@ -14,23 +14,33 @@ local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoIn
 local QUEST_ITEM_CLASS = 12
 
 local PADDING = 22
-local MIN_WIDTH, MAX_WIDTH = 260, 520
+local WIDTH_MIN, WIDTH_MAX = 150, 600
+local HEIGHT_MIN, HEIGHT_MAX = 60, 400
+local DEFAULT_WIDTH, DEFAULT_HEIGHT = 300, 180
+local DEFAULT_POINT = { "TOPLEFT", UIParent, "TOP", -DEFAULT_WIDTH / 2, -120 }
 local GOLD = { 1, 0.82, 0 }
 local FONT = "Fonts\\FRIZQT__.TTF"
 
-local function Clamp(value, min, max)
-    if value < min then return min end
-    if value > max then return max end
-    return value
-end
+-- UI prefs (scale, size, lock), shared across characters. Loaded before this file runs.
+killTimerDB = killTimerDB or {}
+if killTimerDB.scale == nil then killTimerDB.scale = 1 end
+if killTimerDB.width == nil then killTimerDB.width = DEFAULT_WIDTH end
+if killTimerDB.height == nil then killTimerDB.height = DEFAULT_HEIGHT end
+if killTimerDB.locked == nil then killTimerDB.locked = false end
 
 local f = CreateFrame("Frame", "killTimerFrame", UIParent, "BackdropTemplate")
-f:SetSize(220, 20)
-f:SetPoint("TOP", 0, -120)
+-- Anchored by its own TOPLEFT corner, which stays fixed on screen as scale or
+-- size change - only "TOP" (top-center) would make those controls appear to
+-- also shift the panel's position.
+f:SetPoint(unpack(DEFAULT_POINT))
+f:SetScale(killTimerDB.scale)
+f:SetClipsChildren(true)
 f:SetMovable(true)
 f:EnableMouse(true)
 f:RegisterForDrag("LeftButton")
-f:SetScript("OnDragStart", f.StartMoving)
+f:SetScript("OnDragStart", function(self)
+    if not killTimerDB.locked then self:StartMoving() end
+end)
 f:SetScript("OnDragStop", f.StopMovingOrSizing)
 f:SetBackdrop({
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -67,8 +77,18 @@ local text = f:CreateFontString(nil, "OVERLAY")
 text:SetFont(FONT, 12)
 text:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -12)
 text:SetJustifyH("LEFT")
-text:SetWordWrap(false)
+-- Word wrap must stay on for embedded "\n" line breaks to render correctly;
+-- with it off WoW shows a placeholder glyph instead of breaking the line.
+text:SetWordWrap(true)
 text:SetSpacing(6)
+
+-- The panel is a fixed size (set via the options panel's Width/Height sliders),
+-- so content wraps/clips to it instead of the panel growing to fit the content.
+local function ApplySize(width, height)
+    f:SetSize(width, height)
+    text:SetWidth(width - PADDING * 2)
+end
+ApplySize(killTimerDB.width, killTimerDB.height)
 
 -- Active "item" quest objectives, keyed by item name. Lets a required item show up
 -- at 0% from the first kill, not just after the first drop.
@@ -256,18 +276,19 @@ f:SetScript("OnUpdate", function(_, elapsed)
     if hasBody then
         text:SetText(table.concat(lines, "\n", 2))
     end
-
-    -- Resize the panel to fit the current content (title + header + optional body).
-    local contentWidth = math.max(title:GetStringWidth(), header:GetStringWidth(),
-        hasBody and text:GetStringWidth() or 0)
-    f:SetWidth(Clamp(contentWidth + PADDING * 2, MIN_WIDTH, MAX_WIDTH))
-
-    local height = PADDING * 2 + title:GetStringHeight() + 10 + header:GetStringHeight()
-    if hasBody then
-        height = height + 12 + 2 + 12 + text:GetStringHeight()
-    end
-    f:SetHeight(height)
 end)
+
+-- Shared state/helpers for killTimerOptions.lua. Addon files are separate Lua
+-- chunks that don't see each other's locals, so this is the handoff point.
+killTimerNS = {
+    frame = f,
+    ApplySize = ApplySize,
+    DEFAULT_POINT = DEFAULT_POINT,
+    WIDTH_MIN = WIDTH_MIN,
+    WIDTH_MAX = WIDTH_MAX,
+    HEIGHT_MIN = HEIGHT_MIN,
+    HEIGHT_MAX = HEIGHT_MAX,
+}
 
 SLASH_KILLTIMER1 = "/killtimer"
 SlashCmdList.KILLTIMER = Reset
