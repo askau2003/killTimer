@@ -35,3 +35,13 @@ the `## Version` field in `killTimer.toc` and to GitHub release tags.
 
 ### Changed
 - The overlay is now a fixed size instead of auto-sizing to its content.
+
+## [1.1] - 2026-11-16
+
+### Added
+- Initial release: live kill count, elapsed time, and quest-item drop-% overlay
+  while leveling.
+- RestedXP step-change integration - resets and logs a chat summary each time
+  the active guide step changes.
+- Redesigned overlay with a title, a larger header for time/kills, and an
+  auto-sizing panel.
