@@ -88,6 +88,21 @@ local function SyncGoals()
     local currentStepItems = CurrentStepItemNames()
     local goals = QuestItemGoals()
     local onlyCurrentStep = next(currentStepItems) ~= nil
+
+    -- RestedXP's guide window can take a tick to repopulate after e.g. /reload. Any
+    -- goal seeded below during that gap (filter briefly off) needs pruning once the
+    -- filter comes back - but only if nothing was actually looted for it yet.
+    if onlyCurrentStep then
+        for i = #itemOrder, 1, -1 do
+            local name = itemOrder[i]
+            local item = items[name]
+            if item.required and item.count == 0 and not currentStepItems[name] then
+                items[name] = nil
+                table.remove(itemOrder, i)
+            end
+        end
+    end
+
     for name, goal in pairs(goals) do
         if not onlyCurrentStep or currentStepItems[name] then
             local item = items[name]
