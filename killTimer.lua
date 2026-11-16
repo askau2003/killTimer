@@ -28,9 +28,13 @@ text:SetJustifyH("LEFT")
 
 -- Active "item" quest objectives (e.g. "Wolf Pelt: 2/8"), keyed by item name.
 -- Lets a required item show up at 0% from the first kill, not just after the first drop.
+local ExpandQuestHeader = C_QuestLog and C_QuestLog.ExpandQuestHeader or ExpandQuestHeader
+
 local function QuestItemGoals()
-    for i = 1, GetNumQuests() do
-        ExpandQuestHeader(i)
+    if ExpandQuestHeader then
+        for i = 1, GetNumQuests() do
+            ExpandQuestHeader(i)
+        end
     end
     local goals = {}
     for i = 1, GetNumQuests() do
