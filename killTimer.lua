@@ -13,7 +13,7 @@ local lootPrefix = LOOT_ITEM_SELF:match("^(.-)%%s") or ""
 local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
 local QUEST_ITEM_CLASS = 12
 
-local f = CreateFrame("Frame", "KillTimerFrame", UIParent)
+local f = CreateFrame("Frame", "killTimerFrame", UIParent)
 f:SetSize(220, 20)
 f:SetPoint("TOP", 0, -120)
 f:SetMovable(true)
@@ -102,10 +102,10 @@ f:SetScript("OnUpdate", function(_, elapsed)
     if step ~= lastStep then
         if start and lastStep then
             local lines = Lines()
-            print("KillTimer: step " .. tostring(lastStep))
+            print("killTimer: step " .. tostring(lastStep))
             for _, line in ipairs(lines) do print("  " .. line) end
-            KillTimerLog = KillTimerLog or {}
-            KillTimerLog[#KillTimerLog + 1] = {
+            killTimerLog = killTimerLog or {}
+            killTimerLog[#killTimerLog + 1] = {
                 step = lastStep,
                 time = date("%Y-%m-%d %H:%M"),
                 result = table.concat(lines, "\n"),

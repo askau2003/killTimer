@@ -1,4 +1,4 @@
-# KillTimer
+# killTimer
 
 A World of Warcraft addon for Forever. It overlays kill count, elapsed time, and quest-item
 drop-% while leveling, and logs a summary each time RestedXP's leveling step changes.
@@ -6,11 +6,11 @@ drop-% while leveling, and logs a summary each time RestedXP's leveling step cha
 ## Installation
 
 1. Download this repository (via `Code > Download ZIP` on GitHub, or `git clone`).
-2. Copy (or symlink) the folder into your AddOns directory, named exactly `KillTimer`:
+2. Copy (or symlink) the folder into your AddOns directory, named exactly `killTimer`:
    ```
-   World of Warcraft/_forever_/Interface/AddOns/KillTimer/
+   World of Warcraft/_forever_/Interface/AddOns/killTimer/
    ```
-   The folder must directly contain `KillTimer.toc` and `KillTimer.lua`.
+   The folder must directly contain `killTimer.toc` and `killTimer.lua`.
 3. Restart the client, or `/reload` if it's already running.
 4. Make sure the addon is enabled in the character-select AddOns list.
 
@@ -21,7 +21,7 @@ drop-% while leveling, and logs a summary each time RestedXP's leveling step cha
 - `/killtimer` resets the overlay and its counters manually.
 - With [RestedXP](https://www.restedxp.com/) installed, the overlay resets automatically
   whenever RestedXP's leveling step changes, and a summary is printed to chat and saved to
-  `KillTimerLog` (per character). Without RestedXP, the overlay just runs continuously.
+  `killTimerLog` (per character). Without RestedXP, the overlay just runs continuously.
 
 ## Requirements
 
