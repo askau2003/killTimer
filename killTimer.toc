@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: killTimer
-## Notes: Live kill/time/drop-% overlay for WoW: Forever players leveling with RestedXP. /killtimer resets it.
+## Notes: Live kill/time/drop-% overlay for WoW: Forever players leveling with RestedXP.
 ## Version: 1.4
 ## SavedVariablesPerCharacter: killTimerLog
 ## SavedVariables: killTimerDB

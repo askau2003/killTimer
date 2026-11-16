@@ -11,7 +11,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   reuse that changelog entry as the release notes.
 - Never skip a version number in `CHANGELOG.md` or GitHub releases - every bumped version
   gets its own changelog entry and its own tagged release, even if that version was never
-  previously published. GitHub's release list sorts by each release's creation time, not
-  by the tag it points to or by semver, so when releases are created/recreated out of
-  version order, recreate ALL of them (oldest version first, with a short delay between
-  each) so the displayed order still matches version order.
+  previously published.
