@@ -1,6 +1,6 @@
 local start, kills, lastStep, lastMob, lootFromMob
 local mobs, mobOrder = {}, {}    -- mob name -> kill count (+ display order)
-local items, itemOrder = {}, {}  -- item name -> { count = n, mobs = { mob name = true } }
+local items, itemOrder = {}, {}  -- item name -> { count = n, fulfilled = f, required = r }
 
 -- Builds a pattern from the game's own text "%s dies, you gain %d experience."
 -- Quest XP ("You gain %d experience.") doesn't match, so only kills count.
@@ -26,6 +26,41 @@ local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 text:SetPoint("TOPLEFT")
 text:SetJustifyH("LEFT")
 
+-- Active "item" quest objectives (e.g. "Wolf Pelt: 2/8"), keyed by item name.
+-- Lets a required item show up at 0% from the first kill, not just after the first drop.
+local function QuestItemGoals()
+    for i = 1, GetNumQuests() do
+        ExpandQuestHeader(i)
+    end
+    local goals = {}
+    for i = 1, GetNumQuests() do
+        for j = 1, GetNumQuestLeaderBoards(i) do
+            local description, objectiveType, isCompleted = GetQuestLogLeaderBoard(j, i)
+            if description and objectiveType == "item" and not isCompleted then
+                local name, fulfilled, required = description:match("^(.-)%s*:?%s*(%d+)/(%d+)$")
+                if name and name ~= "" then
+                    goals[name] = { fulfilled = tonumber(fulfilled), required = tonumber(required) }
+                end
+            end
+        end
+    end
+    return goals
+end
+
+-- Seeds `items` with any active quest-item goal (at 0 if not looted yet) and
+-- refreshes its fulfilled/required count from the quest log.
+local function SyncGoals()
+    for name, goal in pairs(QuestItemGoals()) do
+        local item = items[name]
+        if not item then
+            item = { count = 0 }
+            items[name] = item
+            itemOrder[#itemOrder + 1] = name
+        end
+        item.fulfilled, item.required = goal.fulfilled, goal.required
+    end
+end
+
 -- Used both for the overlay and for the chat summary when a step ends.
 local function Lines()
     local t = start and GetTime() - start or 0
@@ -34,13 +69,13 @@ local function Lines()
         out[#out + 1] = ("%d  %s"):format(mobs[name], name)
     end
     for _, name in ipairs(itemOrder) do
-        local item, from = items[name], 0
-        for mob in pairs(item.mobs) do from = from + mobs[mob] end
-        if from > 0 then
-            out[#out + 1] = ("|cff00ccff%d  %s (%d%%)|r"):format(
-                item.count, name, math.floor(item.count / from * 100 + 0.5))
+        local item = items[name]
+        local pct = kills > 0 and math.floor(item.count / kills * 100 + 0.5) or 0
+        if item.required then
+            out[#out + 1] = ("|cff00ccff%d  %s (%d%%)  %d/%d|r"):format(
+                item.count, name, pct, item.fulfilled or 0, item.required)
         else
-            out[#out + 1] = ("|cff00ccff%d  %s|r"):format(item.count, name)
+            out[#out + 1] = ("|cff00ccff%d  %s (%d%%)|r"):format(item.count, name, pct)
         end
     end
     return out
@@ -80,13 +115,11 @@ f:SetScript("OnEvent", function(_, event, msg)
         local name = link:match("%[(.-)%]")
         local item = items[name]
         if not item then
-            item = { count = 0, mobs = {} }
+            item = { count = 0 }
             items[name] = item
             itemOrder[#itemOrder + 1] = name
         end
         item.count = item.count + (tonumber(msg:match("|h|rx(%d+)")) or 1)
-        -- We're not told which mob the item came from, so it's attributed to the most recently killed one.
-        item.mobs[lastMob] = true
     end
 end)
 
@@ -114,6 +147,7 @@ f:SetScript("OnUpdate", function(_, elapsed)
         lastStep = step
         Reset()
     end
+    SyncGoals()
     text:SetText(table.concat(Lines(), "\n"))
 end)
 
