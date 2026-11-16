@@ -51,10 +51,12 @@ local function QuestItemGoals()
 end
 
 -- Item names from RestedXP's own currently-displayed step(s), read straight off its
--- guide-window frames (RXPFrame.CurrentStepFrame.framePool[n].step.elements[n].itemName).
+-- guide-window frames (RXPFrame.CurrentStepFrame.framePool[n].step.elements[n]).
 -- This isn't a public RXPGuides API - it's internal UI state - so it can break on a
 -- RestedXP update. If that happens this just returns an empty table and SyncGoals()
 -- falls back to showing every active quest-item goal instead of only the current step's.
+-- Objective elements don't set `itemName`; their rendered text is "1/10 Hatefury Claw"
+-- (count first), the reverse of Blizzard's own "Hatefury Claw: 1/10" quest log text.
 local function CurrentStepItemNames()
     local names = {}
     local framePool = RXPFrame and RXPFrame.CurrentStepFrame and RXPFrame.CurrentStepFrame.framePool
@@ -64,6 +66,11 @@ local function CurrentStepItemNames()
         for _, element in ipairs(step and step.elements or {}) do
             if element.itemName then
                 names[element.itemName] = true
+            end
+            local text = element.rawtext or element.text
+            local name = text and text:match("^%d+%s*/%s*%d+%s+(.+)$")
+            if name then
+                names[name] = true
             end
         end
     end
