@@ -28,22 +28,21 @@ text:SetJustifyH("LEFT")
 
 -- Active "item" quest objectives (e.g. "Wolf Pelt: 2/8"), keyed by item name.
 -- Lets a required item show up at 0% from the first kill, not just after the first drop.
-local ExpandQuestHeader = C_QuestLog and C_QuestLog.ExpandQuestHeader or ExpandQuestHeader
-
 local function QuestItemGoals()
-    if ExpandQuestHeader then
-        for i = 1, GetNumQuests() do
-            ExpandQuestHeader(i)
-        end
-    end
     local goals = {}
-    for i = 1, GetNumQuests() do
-        for j = 1, GetNumQuestLeaderBoards(i) do
-            local description, objectiveType, isCompleted = GetQuestLogLeaderBoard(j, i)
-            if description and objectiveType == "item" and not isCompleted then
-                local name, fulfilled, required = description:match("^(.-)%s*:?%s*(%d+)/(%d+)$")
-                if name and name ~= "" then
-                    goals[name] = { fulfilled = tonumber(fulfilled), required = tonumber(required) }
+    if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo
+        and C_QuestLog.GetQuestObjectives) then
+        return goals
+    end
+    for i = 1, C_QuestLog.GetNumQuestLogEntries() do
+        local info = C_QuestLog.GetInfo(i)
+        if info and not info.isHeader and info.questID then
+            for _, obj in ipairs(C_QuestLog.GetQuestObjectives(info.questID) or {}) do
+                if obj.type == "item" and not obj.finished and obj.text then
+                    local name = obj.text:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$") or obj.text
+                    if name ~= "" then
+                        goals[name] = { fulfilled = obj.numFulfilled, required = obj.numRequired }
+                    end
                 end
             end
         end
