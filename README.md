@@ -74,11 +74,13 @@ current stats as plain text. Press **Ctrl+A** then **Ctrl+C** to copy it, then p
 anywhere (Discord, chat, etc.) - WoW addons can't write to the clipboard directly, so this
 select-and-copy box is the standard workaround.
 
-## Reporting bugs
+## Reporting bugs and requesting features
 
-[Open an issue](https://github.com/askau2003/killTimer/issues/new?template=bug_report.yml)
-using the bug report template - it asks for the addon version, whether RestedXP is
-installed, and any Lua errors, which is normally all that's needed to track down a problem.
+- [Report a bug](https://github.com/askau2003/killTimer/issues/new?template=bug_report.yml) -
+  asks for the addon version, whether RestedXP is installed, and any Lua errors, which is
+  normally all that's needed to track down a problem.
+- [Request a feature](https://github.com/askau2003/killTimer/issues/new?template=feature_request.yml) -
+  asks what problem it would solve and what you'd like to happen.
 
 ## License
 
