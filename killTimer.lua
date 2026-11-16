@@ -26,8 +26,10 @@ local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 text:SetPoint("TOPLEFT")
 text:SetJustifyH("LEFT")
 
--- Active "item" quest objectives (e.g. "Wolf Pelt: 2/8"), keyed by item name.
--- Lets a required item show up at 0% from the first kill, not just after the first drop.
+-- Active "item" quest objectives, keyed by item name. Lets a required item show up
+-- at 0% from the first kill, not just after the first drop.
+-- This client's objective text is "1/10 Hatefury Horn" (count first), not Blizzard's
+-- usual "Hatefury Horn: 1/10" - try that form first, falling back to the usual one.
 local function QuestItemGoals()
     local goals = {}
     if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo
@@ -39,7 +41,9 @@ local function QuestItemGoals()
         if info and not info.isHeader and info.questID then
             for _, obj in ipairs(C_QuestLog.GetQuestObjectives(info.questID) or {}) do
                 if obj.type == "item" and not obj.finished and obj.text then
-                    local name = obj.text:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$") or obj.text
+                    local name = obj.text:match("^%d+%s*/%s*%d+%s+(.+)$")
+                        or obj.text:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$")
+                        or obj.text
                     if name ~= "" then
                         goals[name] = { fulfilled = obj.numFulfilled, required = obj.numRequired }
                     end
@@ -82,8 +86,9 @@ end
 -- item(s) RestedXP's current step is asking for, when that's known.
 local function SyncGoals()
     local currentStepItems = CurrentStepItemNames()
+    local goals = QuestItemGoals()
     local onlyCurrentStep = next(currentStepItems) ~= nil
-    for name, goal in pairs(QuestItemGoals()) do
+    for name, goal in pairs(goals) do
         if not onlyCurrentStep or currentStepItems[name] then
             local item = items[name]
             if not item then
