@@ -1,7 +1,11 @@
 local start, kills, lastStep, lastMob, lootFromMob
 local lastMonsterCounts = {}
 local pendingKills = {}  -- mobs killed since the last OnUpdate tick, oldest first
-local mobs, mobOrder = {}, {}    -- mob name -> kill count (+ display order), for kills not tied to a quest
+-- Kills not tied to a quest kill-objective (pure item farming) are grouped by the
+-- mob name's first word (e.g. "Kolkar Mauler" and "Kolkar Battle Lord" both group
+-- under "Kolkar") since there's no Blizzard-provided family name to group by here.
+local mobs, mobOrder = {}, {}    -- name prefix -> kill count (+ display order)
+local mobBreakdown = {}          -- name prefix -> { counts = {full name -> count}, order }
 local monsterGroups, groupOrder = {}, {}  -- objective key -> { text, fulfilled, required, mobs, mobOrder }
 local items, itemOrder = {}, {}  -- item name -> { count = n, fulfilled = f, required = r }
 
@@ -128,14 +132,25 @@ textHitbox:RegisterForDrag("LeftButton")
 textHitbox:SetScript("OnDragStart", BeginDrag)
 textHitbox:SetScript("OnDragStop", EndDrag)
 textHitbox:SetScript("OnEnter", function(self)
-    if #groupOrder == 0 then return end
+    if #groupOrder == 0 and #mobOrder == 0 then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    for i, key in ipairs(groupOrder) do
+    local first = true
+    for _, key in ipairs(groupOrder) do
         local group = monsterGroups[key]
-        if i > 1 then GameTooltip:AddLine(" ") end
+        if not first then GameTooltip:AddLine(" ") end
+        first = false
         GameTooltip:AddLine(group.text, GOLD[1], GOLD[2], GOLD[3])
         for _, name in ipairs(group.mobOrder) do
             GameTooltip:AddLine(("%d  %s"):format(group.mobs[name], name), 1, 1, 1)
+        end
+    end
+    for _, key in ipairs(mobOrder) do
+        local breakdown = mobBreakdown[key]
+        if not first then GameTooltip:AddLine(" ") end
+        first = false
+        GameTooltip:AddLine(key, GOLD[1], GOLD[2], GOLD[3])
+        for _, name in ipairs(breakdown.order) do
+            GameTooltip:AddLine(("%d  %s"):format(breakdown.counts[name], name), 1, 1, 1)
         end
     end
     GameTooltip:Show()
@@ -315,7 +330,7 @@ end
 
 local function Reset()
     start, kills, lastMob = nil, 0, nil
-    wipe(mobs) wipe(mobOrder) wipe(items) wipe(itemOrder) wipe(pendingKills)
+    wipe(mobs) wipe(mobOrder) wipe(mobBreakdown) wipe(items) wipe(itemOrder) wipe(pendingKills)
     wipe(monsterGroups) wipe(groupOrder)
     -- Baseline so progress already made on a quest before this reset isn't
     -- mistaken for a kill once the next OnUpdate tick diffs against it.
@@ -453,51 +468,75 @@ f:SetScript("OnUpdate", function(_, elapsed)
     -- An active, unfulfilled item-type objective means a quest item needs looting
     -- from *some* mob - there's no way to tell which NPCs can drop it, so every
     -- kill counts while that's the case, same as before mob filtering existed.
+    -- Restricted to RestedXP's current step (like SyncGoals) so an unrelated item
+    -- quest sitting elsewhere in the quest log doesn't turn off mob filtering here.
+    local currentStepItems = CurrentStepItemNames()
+    local onlyCurrentStep = next(currentStepItems) ~= nil
     local farmingItem = false
-    for _, goal in pairs(QuestItemGoals()) do
-        if goal.required and (goal.fulfilled or 0) < goal.required then
+    for name, goal in pairs(QuestItemGoals()) do
+        if (not onlyCurrentStep or currentStepItems[name])
+            and goal.required and (goal.fulfilled or 0) < goal.required then
             farmingItem = true
             break
         end
     end
 
-    if farmingItem then
+    -- Credit a kill once a monster objective's progress actually increases, rather
+    -- than matching the kill text's mob name against objective text (which fails
+    -- when an objective names a creature family, e.g. "Centaur", instead of the
+    -- specific NPC killed). The delta is credited to the most recently killed mob
+    -- (lastMob); if two different quest mobs die within the same 0.2s tick, the
+    -- earlier one can be misattributed to the later one. Every mob that
+    -- contributes to the same objective (e.g. every Centaur variant) is grouped
+    -- into one display line instead of one line per distinct NPC name. This runs
+    -- regardless of farmingItem, so a step tracking both a monster kill-count and
+    -- an item drop still groups the monster kills instead of losing them to the
+    -- item-farming fallback below.
+    local creditedThisTick = 0
+    for key, obj in pairs(objectives) do
+        local prev = lastMonsterCounts[key] or obj.fulfilled
+        local objDelta = obj.fulfilled - prev
+        if objDelta > 0 and lastMob then
+            start = start or GetTime()
+            kills = kills + objDelta
+            creditedThisTick = creditedThisTick + objDelta
+            local group = monsterGroups[key]
+            if not group then
+                group = { mobs = {}, mobOrder = {} }
+                monsterGroups[key] = group
+                groupOrder[#groupOrder + 1] = key
+            end
+            if not group.mobs[lastMob] then
+                group.mobs[lastMob] = 0
+                group.mobOrder[#group.mobOrder + 1] = lastMob
+            end
+            group.mobs[lastMob] = group.mobs[lastMob] + objDelta
+        end
+    end
+
+    -- Only fall back to counting every pending kill individually on ticks where
+    -- nothing was already credited to a monster objective above - otherwise the
+    -- same kill would be both grouped under its objective and added again here.
+    if farmingItem and creditedThisTick == 0 then
         for _, mob in ipairs(pendingKills) do
             start = start or GetTime()
             kills = kills + 1
-            if not mobs[mob] then
-                mobs[mob] = 0
-                mobOrder[#mobOrder + 1] = mob
+            local key = mob:match("^(%S+)") or mob
+            if not mobs[key] then
+                mobs[key] = 0
+                mobOrder[#mobOrder + 1] = key
             end
-            mobs[mob] = mobs[mob] + 1
-        end
-    else
-        -- Credit a kill once a monster objective's progress actually increases, rather
-        -- than matching the kill text's mob name against objective text (which fails
-        -- when an objective names a creature family, e.g. "Centaur", instead of the
-        -- specific NPC killed). The delta is credited to the most recently killed mob
-        -- (lastMob); if two different quest mobs die within the same 0.2s tick, the
-        -- earlier one can be misattributed to the later one. Every mob that
-        -- contributes to the same objective (e.g. every Centaur variant) is grouped
-        -- into one display line instead of one line per distinct NPC name.
-        for key, obj in pairs(objectives) do
-            local prev = lastMonsterCounts[key] or obj.fulfilled
-            local objDelta = obj.fulfilled - prev
-            if objDelta > 0 and lastMob then
-                start = start or GetTime()
-                kills = kills + objDelta
-                local group = monsterGroups[key]
-                if not group then
-                    group = { mobs = {}, mobOrder = {} }
-                    monsterGroups[key] = group
-                    groupOrder[#groupOrder + 1] = key
-                end
-                if not group.mobs[lastMob] then
-                    group.mobs[lastMob] = 0
-                    group.mobOrder[#group.mobOrder + 1] = lastMob
-                end
-                group.mobs[lastMob] = group.mobs[lastMob] + objDelta
+            mobs[key] = mobs[key] + 1
+            local breakdown = mobBreakdown[key]
+            if not breakdown then
+                breakdown = { counts = {}, order = {} }
+                mobBreakdown[key] = breakdown
             end
+            if not breakdown.counts[mob] then
+                breakdown.counts[mob] = 0
+                breakdown.order[#breakdown.order + 1] = mob
+            end
+            breakdown.counts[mob] = breakdown.counts[mob] + 1
         end
     end
     wipe(pendingKills)

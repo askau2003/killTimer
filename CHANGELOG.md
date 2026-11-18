@@ -3,6 +3,23 @@
 All notable changes to this addon are documented here. Versions correspond to
 the `## Version` field in `killTimer.toc` and to GitHub release tags.
 
+## [1.5] - 2026-11-18
+
+### Fixed
+- Pure item-farming (e.g. a "loot X Charms" quest with no kill-count
+  objective) only disabled monster-objective grouping for the current
+  RestedXP step, not the whole quest log - an unrelated item quest sitting
+  elsewhere no longer turns off mob filtering on other steps.
+- A step that tracks both a "kill X" quest objective and a separate item drop
+  no longer loses the monster-objective grouping (e.g. every Centaur variant)
+  to the item-farming fallback - both are credited correctly.
+
+### Added
+- Pure item-farming kills with no Blizzard kill-count objective (e.g. every
+  Kolkar variant while farming Crude Charms) are now grouped by the mob
+  name's first word into one summary line, with the individual mob counts
+  shown in a tooltip on hover - consistent with quest-objective grouping.
+
 ## [1.4] - 2026-11-16
 
 ### Added
