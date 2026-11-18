@@ -3,6 +3,14 @@
 All notable changes to this addon are documented here. Versions correspond to
 the `## Version` field in `killTimer.toc` and to GitHub release tags.
 
+## [1.6] - 2026-11-18
+
+### Changed
+- Pure item-farming kills are now grouped by any word shared with another
+  already-seen mob, not just the first word - e.g. "Dreaming Whelp" and
+  "Adolescent Whelp" now group together under "Whelp" instead of staying
+  split apart by their differing first word.
+
 ## [1.5] - 2026-11-18
 
 ### Fixed

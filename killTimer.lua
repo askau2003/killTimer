@@ -1,11 +1,13 @@
 local start, kills, lastStep, lastMob, lootFromMob
 local lastMonsterCounts = {}
 local pendingKills = {}  -- mobs killed since the last OnUpdate tick, oldest first
--- Kills not tied to a quest kill-objective (pure item farming) are grouped by the
--- mob name's first word (e.g. "Kolkar Mauler" and "Kolkar Battle Lord" both group
--- under "Kolkar") since there's no Blizzard-provided family name to group by here.
-local mobs, mobOrder = {}, {}    -- name prefix -> kill count (+ display order)
-local mobBreakdown = {}          -- name prefix -> { counts = {full name -> count}, order }
+-- Kills not tied to a quest kill-objective (pure item farming) are grouped by
+-- whatever word(s) a mob's name shares with another already-seen mob (e.g.
+-- "Kolkar Mauler" and "Kolkar Battle Lord" group under "Kolkar"; "Dreaming Whelp"
+-- and "Adolescent Whelp" group under "Whelp") since there's no Blizzard-provided
+-- family name to group by here. See GroupMob() below.
+local mobs, mobOrder = {}, {}    -- group label -> kill count (+ display order)
+local mobBreakdown = {}          -- group label -> { counts = {full name -> count}, order, words }
 local monsterGroups, groupOrder = {}, {}  -- objective key -> { text, fulfilled, required, mobs, mobOrder }
 local items, itemOrder = {}, {}  -- item name -> { count = n, fulfilled = f, required = r }
 
@@ -328,6 +330,69 @@ local function Lines()
     return out
 end
 
+-- Assigns a pure item-farming kill to a group, merging it into an existing
+-- group when its name shares a word with one (e.g. "Dreaming Whelp" joins a
+-- group already holding "Adolescent Whelp" because both contain "Whelp"),
+-- otherwise starting a new group keyed by the mob's first word. A group's
+-- label narrows to just the word(s) still common to every member once it has
+-- more than one, and the group is renamed (migrating its stored counts) when
+-- that narrowed label differs from its current one.
+local function GroupMob(mob)
+    local mobWords = {}
+    for w in mob:gmatch("%S+") do mobWords[w] = true end
+
+    local matchedKey
+    for _, key in ipairs(mobOrder) do
+        for w in pairs(mobBreakdown[key].words) do
+            if mobWords[w] then
+                matchedKey = key
+                break
+            end
+        end
+        if matchedKey then break end
+    end
+
+    if not matchedKey then
+        local key = mob:match("^(%S+)") or mob
+        mobs[key] = 0
+        mobOrder[#mobOrder + 1] = key
+        mobBreakdown[key] = { counts = {}, order = {}, words = mobWords }
+        return key
+    end
+
+    local breakdown = mobBreakdown[matchedKey]
+    local narrowed = {}
+    for w in pairs(breakdown.words) do
+        if mobWords[w] then narrowed[w] = true end
+    end
+    breakdown.words = narrowed
+
+    -- Pick the longest shared word as the label (ties broken alphabetically)
+    -- since that tends to be the most specific/descriptive one, e.g. "Whelp"
+    -- over a shorter shared word that might just be a common adjective.
+    local label
+    for w in pairs(narrowed) do
+        if not label or #w > #label or (#w == #label and w < label) then
+            label = w
+        end
+    end
+    label = label or matchedKey
+
+    if label == matchedKey then return matchedKey end
+
+    mobs[label] = mobs[matchedKey]
+    mobs[matchedKey] = nil
+    mobBreakdown[label] = breakdown
+    mobBreakdown[matchedKey] = nil
+    for i, key in ipairs(mobOrder) do
+        if key == matchedKey then
+            mobOrder[i] = label
+            break
+        end
+    end
+    return label
+end
+
 local function Reset()
     start, kills, lastMob = nil, 0, nil
     wipe(mobs) wipe(mobOrder) wipe(mobBreakdown) wipe(items) wipe(itemOrder) wipe(pendingKills)
@@ -521,17 +586,9 @@ f:SetScript("OnUpdate", function(_, elapsed)
         for _, mob in ipairs(pendingKills) do
             start = start or GetTime()
             kills = kills + 1
-            local key = mob:match("^(%S+)") or mob
-            if not mobs[key] then
-                mobs[key] = 0
-                mobOrder[#mobOrder + 1] = key
-            end
+            local key = GroupMob(mob)
             mobs[key] = mobs[key] + 1
             local breakdown = mobBreakdown[key]
-            if not breakdown then
-                breakdown = { counts = {}, order = {} }
-                mobBreakdown[key] = breakdown
-            end
             if not breakdown.counts[mob] then
                 breakdown.counts[mob] = 0
                 breakdown.order[#breakdown.order + 1] = mob
