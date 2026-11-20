@@ -1,4 +1,5 @@
-local start, kills, lastStep, lastMob, lootFromMob
+local started, kills, activeTime = false, 0, 0
+local lastStep, lastMob, lastMobTime, lootFromMobTime
 local lastMonsterCounts = {}
 local pendingKills = {}  -- mobs killed since the last OnUpdate tick, oldest first
 -- Kills not tied to a quest kill-objective (pure item farming) are grouped by
@@ -6,12 +7,14 @@ local pendingKills = {}  -- mobs killed since the last OnUpdate tick, oldest fir
 -- "Kolkar Mauler" and "Kolkar Battle Lord" group under "Kolkar"; "Dreaming Whelp"
 -- and "Adolescent Whelp" group under "Whelp") since there's no Blizzard-provided
 -- family name to group by here. See GroupMob() below.
--- Step-scoped like start/kills (see PruneFinishedObjectives), not wiped on every
--- step change: a concurrent item/monster objective can still be open.
+-- Dropped together with the header's timer and kill count (see
+-- PruneFinishedObjectives), not on every step change: a concurrent item or monster
+-- objective can still be open.
 local mobs, mobOrder = {}, {}    -- group label -> kill count (+ display order)
 local mobBreakdown = {}          -- group label -> { counts = {full name -> count}, order, words }
-local monsterGroups, groupOrder = {}, {}  -- objective key -> { text, fulfilled, required, mobs, mobOrder }
-local items, itemOrder = {}, {}  -- item name -> { count = n, fulfilled = f, required = r }
+-- objective key -> { text, questID, fulfilled, required, mobs, mobOrder, elapsed }
+local monsterGroups, groupOrder = {}, {}
+local items, itemOrder = {}, {}  -- item name -> { count, fulfilled, required, questID, elapsed, seenInStep }
 
 -- Builds a pattern from the game's own text "%s dies, you gain %d experience."
 -- Quest XP ("You gain %d experience.") doesn't match, so only kills count.
@@ -277,64 +280,81 @@ local function MonsterObjectives()
     return objectives
 end
 
--- Item names from RestedXP's own currently-displayed step(s), read straight off its
--- guide-window frames (RXPFrame.CurrentStepFrame.framePool[n].step.elements[n]).
+-- What RestedXP's own currently-displayed step(s) are asking for, read straight off
+-- its guide-window frames (RXPFrame.CurrentStepFrame.framePool[n].step.elements[n]):
+-- the quest IDs involved, plus names for the elements that only render text.
 -- This isn't a public RXPGuides API - it's internal UI state - so it can break on a
--- RestedXP update. If that happens this just returns an empty table and SyncGoals()
--- falls back to showing every active quest-item goal instead of only the current step's.
+-- RestedXP update. If that happens both tables come back empty and the callers fall
+-- back to tracking every active objective instead of only the current step's.
 -- Objective elements don't set `itemName`; their rendered text is "1/10 Hatefury Claw"
 -- (count first), the reverse of Blizzard's own "Hatefury Claw: 1/10" quest log text.
-local function CurrentStepItemNames()
-    local names = {}
+local function CurrentStepTargets()
+    local names, quests = {}, {}
     local framePool = RXPFrame and RXPFrame.CurrentStepFrame and RXPFrame.CurrentStepFrame.framePool
-    if not framePool then return names end
+    if not framePool then return names, quests end
     for _, stepframe in ipairs(framePool) do
         local step = stepframe.step
         for _, element in ipairs(step and step.elements or {}) do
             if element.itemName then
-                names[element.itemName] = true
+                names[NormalizeName(element.itemName)] = true
             end
-            local text = element.rawtext or element.text
-            local name = text and text:match("^%d+%s*/%s*%d+%s+(.+)$")
+            local elementText = element.rawtext or element.text
+            local name = elementText and elementText:match("^%d+%s*/%s*%d+%s+(.+)$")
             if name then
-                names[name] = true
+                names[NormalizeName(name)] = true
+            end
+            local questID = tonumber(element.questId or element.questID)
+            if questID then
+                quests[questID] = true
             end
         end
     end
-    return names
+    return names, quests
+end
+
+-- Whether an objective is what the current step is about. Its quest ID is the
+-- reliable key; the name is only compared for step elements that render text
+-- without one. With no step information at all (no RestedXP, or its guide window
+-- not populated yet) everything counts as current, as it did before this filter.
+local function IsCurrentStep(stepNames, stepQuests, name, questID)
+    if not next(stepNames) and not next(stepQuests) then return true end
+    if questID and stepQuests[questID] then return true end
+    return name ~= nil and stepNames[NormalizeName(name)] == true
 end
 
 -- Seeds `items` with any active quest-item goal (at 0 if not looted yet) and
 -- refreshes its fulfilled/required count from the quest log. Restricted to the
 -- item(s) RestedXP's current step is asking for, when that's known.
-local function SyncGoals()
-    local currentStepItems = CurrentStepItemNames()
-    local goals = QuestItemGoals()
-    local onlyCurrentStep = next(currentStepItems) ~= nil
-
+local function SyncGoals(goals, stepNames, stepQuests)
     -- RestedXP's guide window can take a tick to repopulate after e.g. /reload. Any
     -- goal seeded below during that gap (filter briefly off) needs pruning once the
-    -- filter comes back - but only if nothing was actually looted for it yet.
-    if onlyCurrentStep then
-        for i = #itemOrder, 1, -1 do
-            local name = itemOrder[i]
-            local item = items[name]
-            if item.required and item.count == 0 and not currentStepItems[name] then
-                items[name] = nil
-                table.remove(itemOrder, i)
-            end
+    -- filter is back - but only goals that were never part of a current step: one
+    -- that was carries over across step changes on purpose (see
+    -- PruneFinishedObjectives), and a long dry streak is exactly the count == 0 case
+    -- this would otherwise throw away.
+    for i = #itemOrder, 1, -1 do
+        local name = itemOrder[i]
+        local item = items[name]
+        if item.required and item.count == 0 and not item.seenInStep
+            and not IsCurrentStep(stepNames, stepQuests, name, item.questID) then
+            items[name] = nil
+            table.remove(itemOrder, i)
         end
     end
 
     for name, goal in pairs(goals) do
-        if not onlyCurrentStep or currentStepItems[name] then
+        local current = IsCurrentStep(stepNames, stepQuests, name, goal.questID)
+        -- Already-tracked goals keep refreshing once the step moves on, so a line
+        -- carried across a step change doesn't show a frozen x/y.
+        if current or items[name] then
             local item = items[name]
             if not item then
                 item = { count = 0 }
                 items[name] = item
                 itemOrder[#itemOrder + 1] = name
             end
-            item.fulfilled, item.required = goal.fulfilled, goal.required
+            item.fulfilled, item.required, item.questID = goal.fulfilled, goal.required, goal.questID
+            item.seenInStep = item.seenInStep or current
         end
     end
 end
@@ -344,32 +364,47 @@ local function FormatTime(t)
     return ("%d:%02d"):format(math.floor(t / 60), math.floor(t % 60))
 end
 
--- Used both for the overlay and for the chat summary when a step ends.
+-- The header's clock is work time, not wall-clock since the first kill: it only
+-- runs on ticks where something listed below it is being worked on (see OnUpdate),
+-- which keeps it comparable to the per-line clocks now that both survive a step
+-- change - wall-clock would also count every turn-in and flight path in between.
+local function HeaderLine()
+    return ("%s  %d kills"):format(FormatTime(activeTime), kills)
+end
+
+local function MobLine(key)
+    return ("%d  %s"):format(mobs[key], key)
+end
+
+local function GroupLine(group)
+    if not group.required then
+        return ("%d  %s"):format(group.fulfilled, group.text)
+    end
+    local pct = group.required > 0 and math.floor(group.fulfilled / group.required * 100 + 0.5) or 0
+    return ("%d  %s (%d%%)  %d/%d  %s"):format(
+        group.fulfilled, group.text, pct, group.fulfilled, group.required, FormatTime(group.elapsed))
+end
+
+local function ItemLine(name, item)
+    local pct = kills > 0 and math.floor(item.count / kills * 100 + 0.5) or 0
+    if not item.required then
+        return ("|cff00ccff%d  %s (%d%%)|r"):format(item.count, name, pct)
+    end
+    return ("|cff00ccff%d  %s (%d%%)  %d/%d  %s|r"):format(
+        item.count, name, pct, item.fulfilled or 0, item.required, FormatTime(item.elapsed))
+end
+
+-- Used both for the overlay and for the chat summary when objectives finish.
 local function Lines()
-    local t = start and GetTime() - start or 0
-    local out = { ("%s  %d kills"):format(FormatTime(t), kills or 0) }
+    local out = { HeaderLine() }
     for _, name in ipairs(mobOrder) do
-        out[#out + 1] = ("%d  %s"):format(mobs[name], name)
+        out[#out + 1] = MobLine(name)
     end
     for _, key in ipairs(groupOrder) do
-        local group = monsterGroups[key]
-        if group.required then
-            local pct = group.required > 0 and math.floor(group.fulfilled / group.required * 100 + 0.5) or 0
-            out[#out + 1] = ("%d  %s (%d%%)  %d/%d  %s"):format(
-                group.fulfilled, group.text, pct, group.fulfilled, group.required, FormatTime(group.elapsed))
-        else
-            out[#out + 1] = ("%d  %s"):format(group.fulfilled, group.text)
-        end
+        out[#out + 1] = GroupLine(monsterGroups[key])
     end
     for _, name in ipairs(itemOrder) do
-        local item = items[name]
-        local pct = kills > 0 and math.floor(item.count / kills * 100 + 0.5) or 0
-        if item.required then
-            out[#out + 1] = ("|cff00ccff%d  %s (%d%%)  %d/%d  %s|r"):format(
-                item.count, name, pct, item.fulfilled or 0, item.required, FormatTime(item.elapsed))
-        else
-            out[#out + 1] = ("|cff00ccff%d  %s (%d%%)|r"):format(item.count, name, pct)
-        end
+        out[#out + 1] = ItemLine(name, items[name])
     end
     return out
 end
@@ -453,7 +488,8 @@ local function GroupMob(mob)
 end
 
 local function Reset()
-    start, kills, lastMob = nil, 0, nil
+    started, kills, activeTime = false, 0, 0
+    lastMob, lastMobTime = nil, nil
     wipe(mobs) wipe(mobOrder) wipe(mobBreakdown) wipe(items) wipe(itemOrder) wipe(pendingKills)
     wipe(monsterGroups) wipe(groupOrder)
     -- Baseline so progress already made on a quest before this reset isn't
@@ -463,46 +499,83 @@ local function Reset()
     lastMonsterCounts = baseline
 end
 
+-- Chat and killTimerLog summary, written when objectives finish rather than on
+-- every step change: the totals now span however many steps an objective stays
+-- open, so logging them per step would repeat the same kills entry after entry.
+local function LogStep(step, lines)
+    print("killTimer: step " .. tostring(step))
+    for _, line in ipairs(lines) do print("  " .. line) end
+    killTimerLog = killTimerLog or {}
+    killTimerLog[#killTimerLog + 1] = {
+        step = step,
+        time = date("%Y-%m-%d %H:%M"),
+        result = table.concat(lines, "\n"),
+    }
+    -- Only /killtimer log ever reads this back, so it's capped rather than grown
+    -- for the lifetime of the character.
+    while #killTimerLog > LOG_MAX do table.remove(killTimerLog, 1) end
+end
+
 -- Called on every RestedXP step change instead of Reset(): a step boundary doesn't
 -- mean a quest's monster/item objective is done - RestedXP often asks you to kill or
 -- loot something "on the way" across several steps of the same quest. So only the
 -- groups/items whose objective has actually left the quest log (turned in or
--- abandoned) are dropped here; everything still open keeps its kill count, mob
--- breakdown and "work time" (group.elapsed/item.elapsed, see OnUpdate) across the
--- step change. Pure item-farming kills (mobs/mobOrder) have no Blizzard objective to
--- key them by, so they stay step-scoped like before.
-local function PruneFinishedObjectives()
-    local liveObjectives = MonsterObjectives()
+-- abandoned) are dropped here, and those are what gets reported; everything still
+-- open keeps its kill count, mob breakdown and work time (group.elapsed/item.elapsed,
+-- see OnUpdate) across the step change.
+local function PruneFinishedObjectives(step, objectives, goals)
+    local finished = {}
+
+    for _, key in ipairs(groupOrder) do
+        if not objectives[key] then
+            finished[#finished + 1] = GroupLine(monsterGroups[key])
+        end
+    end
     for i = #groupOrder, 1, -1 do
         local key = groupOrder[i]
-        if not liveObjectives[key] then
+        if not objectives[key] then
             monsterGroups[key] = nil
             table.remove(groupOrder, i)
         end
     end
 
     -- An item with no `.required` was looted without ever matching an active quest
-    -- goal (see the CHAT_MSG_LOOT handler) - there's no persistent key for those, so
-    -- they stay step-scoped like the farming-mob fallback above/below instead of
-    -- carrying over.
-    local liveGoals = QuestItemGoals()
+    -- goal (see the CHAT_MSG_LOOT handler) - there's no objective to key those by, so
+    -- they stay step-scoped instead of carrying over, and there's nothing to report.
+    for _, name in ipairs(itemOrder) do
+        local item = items[name]
+        if item.required and not goals[name] then
+            finished[#finished + 1] = ItemLine(name, item)
+        end
+    end
     for i = #itemOrder, 1, -1 do
         local name = itemOrder[i]
         local item = items[name]
-        if not item.required or not liveGoals[name] then
+        if not item.required or not goals[name] then
             items[name] = nil
             table.remove(itemOrder, i)
         end
     end
 
-    -- Nothing carried over - this is a genuinely fresh start, not a mid-quest
-    -- step change, so the header's timer/kill count resets like before. The
-    -- farming-mob fallback tally (mobs/mobOrder) has no objective of its own to
-    -- key continuity by, so it only wipes alongside that same fresh start -
-    -- otherwise it would reset mid-farm whenever some *other* concurrent
-    -- item/monster objective's step just happened to end.
-    if #groupOrder == 0 and #itemOrder == 0 then
-        start, kills = nil, 0
+    -- Nothing carried over - this is a genuinely fresh start, not a mid-quest step
+    -- change, so the header's work time and kill count reset. The farming-mob
+    -- fallback tally (mobs/mobOrder) has no objective of its own to key continuity
+    -- by, so it only drops alongside that same fresh start - otherwise it would
+    -- reset mid-farm whenever some *other* concurrent objective's step just ended.
+    local freshStart = #groupOrder == 0 and #itemOrder == 0
+    if freshStart then
+        for _, key in ipairs(mobOrder) do
+            finished[#finished + 1] = MobLine(key)
+        end
+    end
+
+    if started and #finished > 0 then
+        table.insert(finished, 1, HeaderLine())
+        LogStep(step, finished)
+    end
+
+    if freshStart then
+        started, kills, activeTime = false, 0, 0
         wipe(mobs) wipe(mobOrder) wipe(mobBreakdown)
     end
 end
@@ -581,28 +654,39 @@ f:SetScript("OnEvent", function(_, event, msg)
         local mob = msg:match(killPattern)
         if not mob then return end
         -- Counting/crediting happens later, once OnUpdate sees whether this kill
-        -- actually advanced a quest objective (see MonsterObjectiveCounts above).
-        lastMob = mob
+        -- actually advanced a quest objective.
+        lastMob, lastMobTime = mob, GetTime()
         pendingKills[#pendingKills + 1] = mob
 
     elseif event == "LOOT_READY" then
         -- Is this a corpse we're looting (and not e.g. a chest or Rocket Car Rubble)?
         local guid = GetLootSourceInfo and GetNumLootItems() > 0 and GetLootSourceInfo(1)
-        lootFromMob = type(guid) == "string" and guid:find("^Creature") ~= nil
+        local fromMob = type(guid) == "string" and guid:find("^Creature") ~= nil
+        lootFromMobTime = fromMob and GetTime() or nil
 
     elseif event == "CHAT_MSG_LOOT" then
         if msg:find(lootPrefix, 1, true) ~= 1 then return end
         local link = msg:match("|Hitem:.-|h%[.-%]|h")
-        if not link or select(6, GetItemInfoInstant(link)) ~= QUEST_ITEM_CLASS then return end
-        if not lootFromMob or not lastMob then return end
-        local name = link:match("%[(.-)%]")
+        local name = link and link:match("%[(.-)%]")
+        if not name then return end
         local item = items[name]
+        -- Blizzard's "Quest" item class covers most of what quests ask for, but not
+        -- all of it - plenty of collection quests want a trade good or a plain junk
+        -- item - so anything the quest log is actually asking for (seeded by
+        -- SyncGoals) counts no matter its class.
+        local isQuestItem = select(6, GetItemInfoInstant(link)) == QUEST_ITEM_CLASS
+        if not isQuestItem and not (item and item.required) then return end
+        if not lastMob or not lootFromMobTime
+            or GetTime() - lootFromMobTime > LOOT_WINDOW then
+            return
+        end
         if not item then
             item = { count = 0 }
             items[name] = item
             itemOrder[#itemOrder + 1] = name
         end
         item.count = item.count + (tonumber(msg:match("|h|rx(%d+)")) or 1)
+        item.lastLoot = GetTime()
     end
 end)
 
@@ -612,39 +696,32 @@ f:SetScript("OnUpdate", function(_, elapsed)
     if sinceUpdate < 0.2 then return end
     local dt = sinceUpdate
     sinceUpdate = 0
+    local now = GetTime()
+
+    -- One pass over the quest log per tick, shared by everything below: each of
+    -- these walks every quest and all of its objectives, five times a second.
+    local objectives = MonsterObjectives()
+    local goals = QuestItemGoals()
+    local stepNames, stepQuests = CurrentStepTargets()
 
     -- RestedXP stores the active step in the global RXPCData.
     -- Without RestedXP, step stays nil and the overlay just keeps running.
     local step = RXPCData and RXPCData.currentStep
     if step ~= lastStep then
-        if start and lastStep then
-            local lines = Lines()
-            print("killTimer: step " .. tostring(lastStep))
-            for _, line in ipairs(lines) do print("  " .. line) end
-            killTimerLog = killTimerLog or {}
-            killTimerLog[#killTimerLog + 1] = {
-                step = lastStep,
-                time = date("%Y-%m-%d %H:%M"),
-                result = table.concat(lines, "\n"),
-            }
-        end
+        local prevStep = lastStep
         lastStep = step
-        PruneFinishedObjectives()
+        PruneFinishedObjectives(prevStep, objectives, goals)
     end
-
-    local objectives = MonsterObjectives()
 
     -- An active, unfulfilled item-type objective means a quest item needs looting
     -- from *some* mob - there's no way to tell which NPCs can drop it, so every
     -- kill counts while that's the case, same as before mob filtering existed.
     -- Restricted to RestedXP's current step (like SyncGoals) so an unrelated item
     -- quest sitting elsewhere in the quest log doesn't turn off mob filtering here.
-    local currentStepItems = CurrentStepItemNames()
-    local onlyCurrentStep = next(currentStepItems) ~= nil
     local farmingItem = false
-    for name, goal in pairs(QuestItemGoals()) do
-        if (not onlyCurrentStep or currentStepItems[name])
-            and goal.required and (goal.fulfilled or 0) < goal.required then
+    for name, goal in pairs(goals) do
+        if goal.required and (goal.fulfilled or 0) < goal.required
+            and IsCurrentStep(stepNames, stepQuests, name, goal.questID) then
             farmingItem = true
             break
         end
@@ -657,39 +734,42 @@ f:SetScript("OnUpdate", function(_, elapsed)
     -- (lastMob); if two different quest mobs die within the same 0.2s tick, the
     -- earlier one can be misattributed to the later one. Every mob that
     -- contributes to the same objective (e.g. every Centaur variant) is grouped
-    -- into one display line instead of one line per distinct NPC name. This runs
-    -- regardless of farmingItem, so a step tracking both a monster kill-count and
-    -- an item drop still groups the monster kills instead of losing them to the
-    -- item-farming fallback below.
-    local creditedThisTick = 0
+    -- into one display line instead of one line per distinct NPC name.
+    local objectiveKills = 0
     for key, obj in pairs(objectives) do
         local prev = lastMonsterCounts[key] or obj.fulfilled
         local objDelta = obj.fulfilled - prev
-        if objDelta > 0 and lastMob then
-            start = start or GetTime()
-            kills = kills + objDelta
-            creditedThisTick = creditedThisTick + objDelta
+        if objDelta > 0 then
+            -- One mob can count towards two quests at once, so these deltas overlap:
+            -- the largest is how many mobs the tick can account for, while adding
+            -- them up would count a shared kill once per quest in the header.
+            objectiveKills = math.max(objectiveKills, objDelta)
+            local mob = UNKNOWN_MOB
+            if lastMob and lastMobTime and now - lastMobTime <= KILL_CREDIT_WINDOW then
+                mob = lastMob
+            end
             local group = monsterGroups[key]
             if not group then
-                group = { mobs = {}, mobOrder = {} }
+                group = { mobs = {}, mobOrder = {}, questID = obj.questID }
                 monsterGroups[key] = group
                 groupOrder[#groupOrder + 1] = key
             end
-            if not group.mobs[lastMob] then
-                group.mobs[lastMob] = 0
-                group.mobOrder[#group.mobOrder + 1] = lastMob
+            if not group.mobs[mob] then
+                group.mobs[mob] = 0
+                group.mobOrder[#group.mobOrder + 1] = mob
             end
-            group.mobs[lastMob] = group.mobs[lastMob] + objDelta
+            group.mobs[mob] = group.mobs[mob] + objDelta
+            group.lastProgress = now
         end
     end
 
-    -- Only fall back to counting every pending kill individually on ticks where
-    -- nothing was already credited to a monster objective above - otherwise the
-    -- same kill would be both grouped under its objective and added again here.
-    if farmingItem and creditedThisTick == 0 then
-        for _, mob in ipairs(pendingKills) do
-            start = start or GetTime()
-            kills = kills + 1
+    -- Whatever fed an objective above are the newest kills on this tick; any older
+    -- ones died for an item drop instead and are counted here, so a mixed step (a
+    -- kill quest plus a drop to farm) loses neither to the other.
+    local farmed = 0
+    if farmingItem then
+        for i = 1, #pendingKills - objectiveKills do
+            local mob = pendingKills[i]
             local key = GroupMob(mob)
             mobs[key] = mobs[key] + 1
             local breakdown = mobBreakdown[key]
@@ -698,9 +778,16 @@ f:SetScript("OnUpdate", function(_, elapsed)
                 breakdown.order[#breakdown.order + 1] = mob
             end
             breakdown.counts[mob] = breakdown.counts[mob] + 1
+            farmed = farmed + 1
         end
     end
     wipe(pendingKills)
+
+    local killsThisTick = objectiveKills + farmed
+    if killsThisTick > 0 then
+        started = true
+        kills = kills + killsThisTick
+    end
 
     -- Keep every known group's displayed progress in sync with the quest log,
     -- even on ticks where nothing died (e.g. right after a /reload).
@@ -708,34 +795,45 @@ f:SetScript("OnUpdate", function(_, elapsed)
         local obj = objectives[key]
         if obj then
             group.text, group.fulfilled, group.required = obj.text, obj.fulfilled, obj.required
+            group.questID = group.questID or obj.questID
         end
     end
 
-    -- Each group's "work time" only runs while RestedXP's current step is actually
+    SyncGoals(goals, stepNames, stepQuests)
+
+    -- Each line's work time only runs while RestedXP's current step is actually
     -- about it - freezing while you're on an unrelated step and picking back up
-    -- (from the saved total, not from zero) once it's relevant again. Without a
-    -- known current step (onlyCurrentStep false), there's nothing to compare
-    -- against, so every group just keeps ticking like a single shared timer did
-    -- before this existed.
+    -- (from the saved total, not from zero) once it's relevant again. Progress
+    -- within ACTIVITY_WINDOW counts as current on its own, so an objective whose
+    -- text or quest ID can't be matched against the step can't freeze the clock
+    -- while you're standing there working on it.
+    local working = false
     for _, key in ipairs(groupOrder) do
         local group = monsterGroups[key]
-        if not onlyCurrentStep or currentStepItems[group.text] then
+        if IsCurrentStep(stepNames, stepQuests, group.text, group.questID)
+            or (group.lastProgress and now - group.lastProgress <= ACTIVITY_WINDOW) then
             group.elapsed = (group.elapsed or 0) + dt
+            working = true
         end
+    end
+    for _, name in ipairs(itemOrder) do
+        local item = items[name]
+        if item.required and (IsCurrentStep(stepNames, stepQuests, name, item.questID)
+            or (item.lastLoot and now - item.lastLoot <= ACTIVITY_WINDOW)) then
+            item.elapsed = (item.elapsed or 0) + dt
+            working = true
+        end
+    end
+
+    -- The header's clock is the union of those per-line windows, plus any tick that
+    -- counted a kill, so it measures the time actually spent on what's listed below.
+    if started and (working or killsThisTick > 0) then
+        activeTime = activeTime + dt
     end
 
     local baseline = {}
     for key, obj in pairs(objectives) do baseline[key] = obj.fulfilled end
     lastMonsterCounts = baseline
-
-    SyncGoals()
-
-    for _, name in ipairs(itemOrder) do
-        local item = items[name]
-        if item.required and (not onlyCurrentStep or currentStepItems[name]) then
-            item.elapsed = (item.elapsed or 0) + dt
-        end
-    end
 
     local lines = Lines()
     header:SetText(lines[1])
