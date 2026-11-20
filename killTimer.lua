@@ -858,10 +858,20 @@ killTimerNS = {
     ShowCopyPopup = ShowCopyPopup,
 }
 
+local LOG_SHOWN = 10
+
 SLASH_KILLTIMER1 = "/killtimer"
 SlashCmdList.KILLTIMER = function(msg)
-    if msg and msg:lower():match("^copy") then
+    msg = (msg or ""):lower()
+    if msg:match("^copy") then
         ShowCopyPopup()
+    elseif msg:match("^log") then
+        local log = killTimerLog or {}
+        print(("killTimer: %d logged step(s)"):format(#log))
+        for i = math.max(1, #log - LOG_SHOWN + 1), #log do
+            print(("  [%s] step %s"):format(tostring(log[i].time), tostring(log[i].step)))
+            for line in (log[i].result or ""):gmatch("[^\n]+") do print("    " .. line) end
+        end
     else
         Reset()
     end
