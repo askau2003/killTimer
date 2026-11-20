@@ -2,7 +2,8 @@ name: CI
 
 # What can be checked without the game running: both Lua files compile, every
 # global the addon touches is a real API name (luacheck, see .luacheckrc), the
-# behaviour regressions in tests/ still hold.
+# behaviour regressions in tests/ still hold, and the version/changelog pair that
+# release.yml turns into release notes is consistent.
 on:
   push:
     branches: ["**"]
@@ -31,3 +32,11 @@ jobs:
 
       - name: Test
         run: lua5.1 tests/run.lua
+
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check killTimer.toc against CHANGELOG.md
+        run: ./scripts/check-versions.sh
