@@ -10,7 +10,7 @@ Follow the steps below to install, enable, and configure it.
 
 - World of Warcraft: Forever (addon interface 16001).
 - [RestedXP](https://www.restedxp.com/) is optional - without it you still get the live
-  overlay, just not the automatic per-step resets and logging.
+  overlay, just not the per-step scoping and the logging of finished objectives.
 
 ## 2. Install the addon
 
@@ -53,18 +53,26 @@ Pick one of the two methods.
 
 ## 5. Use it while leveling
 
-1. Kills, elapsed time, and quest-item drops are tracked automatically - nothing to set up.
+1. Kills, time spent, and quest-item drops are tracked automatically - nothing to set up.
 2. Run `/killtimer` any time to manually reset the overlay and its counters.
-3. With RestedXP installed, the overlay resets itself whenever RestedXP's leveling step
-   changes, and prints a summary to chat (also saved to `killTimerLog`, per character) for
-   the step that just ended:
+3. The clock is time spent working, not wall-clock: it only runs while you're on the step
+   that the line below it is about, so walking to a turn-in or doing an unrelated step
+   doesn't inflate it.
+4. With RestedXP installed, a quest objective keeps its kill count, mob breakdown and time
+   across step changes for as long as it stays in your quest log - RestedXP often asks you
+   to kill or loot something "on the way" over several steps. Once an objective is turned
+   in or abandoned, its result is printed to chat (and saved to `killTimerLog`, per
+   character):
 
    ```
    killTimer: step 3
      2:14  87 kills
      12  Timber Wolf
-     5  Mottled Boar (62%)  5/8
+     5  Mottled Boar (62%)  5/8  1:48
    ```
+
+5. Run `/killtimer log` to print the most recent logged results back into chat. The log
+   keeps the last 200 entries.
 
 ## 6. Share your data
 
@@ -81,6 +89,23 @@ select-and-copy box is the standard workaround.
   normally all that's needed to track down a problem.
 - [Request a feature](https://github.com/askau2003/killTimer/issues/new?template=feature_request.yml) -
   asks what problem it would solve and what you'd like to happen.
+
+## Development
+
+The addon can't be unit-tested inside WoW, so `tests/wow_api.lua` stubs just enough of the
+client - frames, the quest log, loot events and RestedXP's guide window - to load
+`killTimer.lua` outside the game and drive it kill by kill. Every case in
+`tests/killtimer_spec.lua` is a regression that was once real.
+
+```sh
+lua5.1 tests/run.lua        # behaviour tests
+luacheck .                  # undefined globals, shadowing, dead locals
+./scripts/check-versions.sh # killTimer.toc vs CHANGELOG.md
+```
+
+All three run on every push and pull request (`.github/workflows/ci.yml`). Nothing here
+replaces a `/reload` in game - the stub only covers the API calls the addon makes, so UI
+and timing still need a real client.
 
 ## License
 

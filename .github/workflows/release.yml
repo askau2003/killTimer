@@ -16,7 +16,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Package addon
         run: |
@@ -32,6 +32,10 @@ jobs:
             /^## \[/ { flag=0 }
             flag
           ' CHANGELOG.md > dist/notes.md
+          if [ ! -s dist/notes.md ]; then
+            echo "CHANGELOG.md has no [$version] section - add it before pushing the tag" >&2
+            exit 1
+          fi
 
       - name: Create release
         env:
