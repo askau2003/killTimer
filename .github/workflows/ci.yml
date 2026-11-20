@@ -13,7 +13,7 @@ jobs:
   lua:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Lua 5.1 specifically, because that's the interpreter WoW itself runs.
       - name: Install Lua 5.1 and luacheck
@@ -36,7 +36,7 @@ jobs:
   versions:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check killTimer.toc against CHANGELOG.md
         run: ./scripts/check-versions.sh
