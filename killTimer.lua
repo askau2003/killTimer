@@ -179,10 +179,24 @@ C_Timer.After(0, function()
     ApplySize(killTimerDB.width, killTimerDB.height)
 end)
 
--- Active "item" quest objectives, keyed by item name. Lets a required item show up
--- at 0% from the first kill, not just after the first drop.
 -- This client's objective text is "1/10 Hatefury Horn" (count first), not Blizzard's
 -- usual "Hatefury Horn: 1/10" - try that form first, falling back to the usual one.
+local function ObjectiveName(objectiveText)
+    if not objectiveText then return nil end
+    return objectiveText:match("^%d+%s*/%s*%d+%s+(.+)$")
+        or objectiveText:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$")
+        or objectiveText
+end
+
+-- Mob and item names reach us from two sources - RestedXP's rendered step text and
+-- Blizzard's quest log - which only have to mean the same thing, not match byte for
+-- byte, so they're compared in this form.
+local function NormalizeName(s)
+    return (s:lower():gsub("%p", ""):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", ""))
+end
+
+-- Active "item" quest objectives, keyed by item name. Lets a required item show up
+-- at 0% from the first kill, not just after the first drop.
 local function QuestItemGoals()
     local goals = {}
     if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo
@@ -194,11 +208,13 @@ local function QuestItemGoals()
         if info and not info.isHeader and info.questID then
             for _, obj in ipairs(C_QuestLog.GetQuestObjectives(info.questID) or {}) do
                 if obj.type == "item" and not obj.finished and obj.text then
-                    local name = obj.text:match("^%d+%s*/%s*%d+%s+(.+)$")
-                        or obj.text:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$")
-                        or obj.text
-                    if name ~= "" then
-                        goals[name] = { fulfilled = obj.numFulfilled, required = obj.numRequired }
+                    local name = ObjectiveName(obj.text)
+                    if name and name ~= "" then
+                        goals[name] = {
+                            fulfilled = obj.numFulfilled,
+                            required = obj.numRequired,
+                            questID = info.questID,
+                        }
                     end
                 end
             end
@@ -213,8 +229,6 @@ end
 -- in the kill text ("Centaur Plunderer"), so matching by name doesn't work -
 -- instead the kill list watches numFulfilled for increases and credits whichever
 -- mob was killed most recently (see OnUpdate), grouped under this objective.
--- This client's text is "13/15 Centaur" (count first), not Blizzard's usual
--- "Centaur: 13/15" - try that form first, falling back to the usual one.
 local function MonsterObjectives()
     local objectives = {}
     if not (C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo
@@ -226,10 +240,9 @@ local function MonsterObjectives()
         if info and not info.isHeader and info.questID then
             for idx, obj in ipairs(C_QuestLog.GetQuestObjectives(info.questID) or {}) do
                 if obj.type == "monster" then
-                    local name = obj.text and (obj.text:match("^%d+%s*/%s*%d+%s+(.+)$")
-                        or obj.text:match("^(.-)%s*:?%s*%d+%s*/%s*%d+$")) or obj.text
                     objectives[info.questID .. ":" .. idx] = {
-                        text = name or obj.text,
+                        text = ObjectiveName(obj.text) or obj.text,
+                        questID = info.questID,
                         fulfilled = obj.numFulfilled or 0,
                         required = obj.numRequired,
                     }
