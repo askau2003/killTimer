@@ -24,6 +24,30 @@ local lootPrefix = LOOT_ITEM_SELF:match("^(.-)%%s") or ""
 local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
 local QUEST_ITEM_CLASS = 12
 
+-- A quest objective can advance without a kill message (a grey mob, or any kill at
+-- the level cap, earns no XP), so the most recently killed mob is only credited
+-- while it's still fresh - past that the progress is listed as UNKNOWN instead of
+-- being pinned on something that died minutes ago.
+local KILL_CREDIT_WINDOW = 10
+-- "You receive loot:" covers chests, herbs and fishing too, so a drop only counts
+-- while the corpse it came from is still the open loot window.
+local LOOT_WINDOW = 15
+-- Recent progress keeps a line's work clock running even when its objective text
+-- can't be matched against the current step, so the clock can't sit at 0:00 while
+-- you're visibly farming.
+local ACTIVITY_WINDOW = 60
+local LOG_MAX = 200
+local UNKNOWN_MOB = UNKNOWN or "Unknown"
+-- Words that qualify a mob instead of naming its family, so that "Mangy Wolf" and
+-- "Mangy Jaguar" don't become one group while "Dreaming Whelp" and "Adolescent
+-- Whelp" still do. A heuristic: the kill text carries no family name to group by.
+local STOP_WORDS = {}
+for w in ([[a an and of the lone young elder ancient adolescent juvenile adult old
+    great greater lesser giant huge large small mangy rabid diseased starving
+    crazed enraged feral savage wild fierce dire mature elite rare]]):gmatch("%S+") do
+    STOP_WORDS[w] = true
+end
+
 local PADDING = 22
 local WIDTH_MIN, WIDTH_MAX = 150, 600
 local HEIGHT_MIN, HEIGHT_MAX = 60, 400
@@ -350,21 +374,33 @@ local function Lines()
     return out
 end
 
--- Assigns a pure item-farming kill to a group, merging it into an existing
--- group when its name shares a word with one (e.g. "Dreaming Whelp" joins a
--- group already holding "Adolescent Whelp" because both contain "Whelp"),
--- otherwise starting a new group keyed by the mob's first word. A group's
--- label narrows to just the word(s) still common to every member once it has
--- more than one, and the group is renamed (migrating its stored counts) when
--- that narrowed label differs from its current one.
+-- A mob name split into the words that can identify a family, keyed by their
+-- normalized form (so "Kolkar" and "Kolkar's" match) and mapped to the spelling a
+-- label should use.
+local function MobWords(mob)
+    local words = {}
+    for w in mob:gmatch("%S+") do
+        local norm = NormalizeName(w)
+        if norm ~= "" and not STOP_WORDS[norm] then
+            words[norm] = (w:gsub("%p+$", ""))
+        end
+    end
+    return words
+end
+
+-- Assigns a pure item-farming kill to a group, merging it into an existing group
+-- when its name shares a family word with one (e.g. "Dreaming Whelp" joins a group
+-- already holding "Adolescent Whelp" because both contain "Whelp"), otherwise
+-- starting a group of its own. A group of one is labelled with the full mob name;
+-- once it has more members the label narrows to the word(s) still common to all of
+-- them, and the group is renamed (migrating its stored counts) to match.
 local function GroupMob(mob)
-    local mobWords = {}
-    for w in mob:gmatch("%S+") do mobWords[w] = true end
+    local mobWords = MobWords(mob)
 
     local matchedKey
     for _, key in ipairs(mobOrder) do
-        for w in pairs(mobBreakdown[key].words) do
-            if mobWords[w] then
+        for norm in pairs(mobBreakdown[key].words) do
+            if mobWords[norm] then
                 matchedKey = key
                 break
             end
@@ -373,17 +409,18 @@ local function GroupMob(mob)
     end
 
     if not matchedKey then
-        local key = mob:match("^(%S+)") or mob
-        mobs[key] = 0
-        mobOrder[#mobOrder + 1] = key
-        mobBreakdown[key] = { counts = {}, order = {}, words = mobWords }
-        return key
+        if not mobBreakdown[mob] then
+            mobs[mob] = 0
+            mobOrder[#mobOrder + 1] = mob
+            mobBreakdown[mob] = { counts = {}, order = {}, words = mobWords }
+        end
+        return mob
     end
 
     local breakdown = mobBreakdown[matchedKey]
     local narrowed = {}
-    for w in pairs(breakdown.words) do
-        if mobWords[w] then narrowed[w] = true end
+    for norm, word in pairs(breakdown.words) do
+        if mobWords[norm] then narrowed[norm] = word end
     end
     breakdown.words = narrowed
 
@@ -391,14 +428,16 @@ local function GroupMob(mob)
     -- since that tends to be the most specific/descriptive one, e.g. "Whelp"
     -- over a shorter shared word that might just be a common adjective.
     local label
-    for w in pairs(narrowed) do
-        if not label or #w > #label or (#w == #label and w < label) then
-            label = w
+    for _, word in pairs(narrowed) do
+        if not label or #word > #label or (#word == #label and word < label) then
+            label = word
         end
     end
-    label = label or matchedKey
 
-    if label == matchedKey then return matchedKey end
+    -- An already-taken label means either this group's own current key (nothing to
+    -- do) or another group's - renaming into that would silently overwrite its
+    -- counts, so the current key stays.
+    if not label or mobs[label] then return matchedKey end
 
     mobs[label] = mobs[matchedKey]
     mobs[matchedKey] = nil
