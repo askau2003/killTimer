@@ -17,3 +17,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The user always tests a change in-game first, before bumping the version or touching
   `CHANGELOG.md`. Don't bump the version or update the changelog right after an edit -
   wait for the user to confirm the in-game test passed.
+- After every edit to `killTimer.lua`, `killTimerOptions.lua` or `tests/`, run
+  `lua5.1 tests/run.lua` and `luacheck .` before reporting the change as done. The tests
+  stub the WoW API (`tests/wow_api.lua`) and drive the addon headless; a behaviour change
+  belongs in `tests/killtimer_spec.lua` in the same commit. This never replaces the
+  in-game test above - it only catches what's checkable outside the client.
