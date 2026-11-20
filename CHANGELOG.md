@@ -3,6 +3,54 @@
 All notable changes to this addon are documented here. Versions correspond to
 the `## Version` field in `killTimer.toc` and to GitHub release tags.
 
+## [1.7] - 2026-11-20
+
+### Added
+- Each quest objective line now shows how long you have spent working on it,
+  next to its progress.
+- `/killtimer log` prints the most recent logged step results back into chat.
+  The log is kept per character and now holds the last 200 entries - it used
+  to grow for the lifetime of the character with no way to read it back.
+
+### Changed
+- An open quest objective now keeps its kill count, mob breakdown and time
+  across RestedXP step changes instead of being reset at every step boundary -
+  RestedXP often asks you to kill or loot something "on the way" over several
+  steps of the same quest. Its result is printed to chat when the objective
+  actually leaves your quest log (turned in or abandoned) rather than at every
+  step change, which also stops the same kills being repeated in entry after
+  entry.
+- The clock is now time spent working rather than wall-clock: it only runs
+  while you are on a step the line below it is about, so walking to a turn-in,
+  taking a flight path or doing an unrelated step no longer inflates it.
+- Item-farming kills group on a shared family word instead of any shared word,
+  so "Mangy Wolf" and "Mangy Jaguar" stay apart while "Dreaming Whelp" and
+  "Adolescent Whelp" still group under "Whelp". A group holding a single mob
+  type is now labelled with its full name instead of just its first word, and
+  a name's punctuation no longer prevents a match ("Kolkar's" and "Kolkar").
+
+### Fixed
+- A mob that counts towards two quests at once was added to the kill total
+  once per quest, so a single kill read as two.
+- A mob killed for an item drop in the same moment as a quest-objective kill
+  was dropped from the counts entirely.
+- A quest item that is not of Blizzard's "Quest" item class - plenty of
+  collection quests ask for a trade good or a plain junk item - was shown at
+  0% forever while it was in fact being looted.
+- A quest-item goal that had not dropped yet was forgotten as soon as the
+  current step stopped naming it, losing exactly the long dry streak that is
+  worth tracking.
+- A drop counted whenever the last thing looted had been a corpse, so a quest
+  item received well afterwards, or from a chest, could be counted as a drop.
+- Quest progress that arrives without a kill message - a grey mob, or any kill
+  at the level cap - was credited to whatever died last, even if that was
+  minutes earlier. It is listed as Unknown instead, and still counted.
+- An objective's work time could sit at 0:00 for an entire farm when
+  RestedXP's step wording didn't match the quest log's; objectives are now
+  matched by quest ID, and recent progress keeps the clock running on its own.
+- The overlay rebuilt its quest-log data several times per update, five times
+  a second, where once per update is enough.
+
 ## [1.6] - 2026-11-18
 
 ### Changed
